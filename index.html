@@ -1427,20 +1427,10 @@ const VOICE_TARGETS = {
   james: ['Google UK English Male', 'Daniel', 'Gordon', 'Microsoft George Desktop'],
 };
 
-let voicesReady = false;
-let voiceReadyCallbacks = [];
-
 function initVoices() {
-  const tryLoad = () => {
-    const v = speechSynthesis.getVoices();
-    if (v.length > 0) {
-      voicesReady = true;
-      voiceReadyCallbacks.forEach(fn => fn());
-      voiceReadyCallbacks = [];
-    }
-  };
-  speechSynthesis.onvoiceschanged = tryLoad;
-  tryLoad();
+  // Trigger voice list load — Chrome populates it async
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 }
 
 function getVoice() {
@@ -1461,21 +1451,26 @@ function testVoice() {
 function speakText(text) {
   if (!STATE.ttsEnabled || !text.trim()) return;
 
-  const doSpeak = () => {
-    speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.voice = getVoice();
-    utt.rate = 0.93;
-    utt.pitch = 1.0;
-    utt.onerror = () => {}; // suppress console errors
-    speechSynthesis.speak(utt);
+  speechSynthesis.cancel();
+
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.voice = getVoice();
+  utt.rate = 0.93;
+  utt.pitch = 1.0;
+  utt.volume = 1.0;
+
+  // Chrome has a known bug where long utterances get cut off silently.
+  // The workaround is to resume() on an interval until it finishes.
+  utt.onstart = () => {
+    const keepAlive = setInterval(() => {
+      if (speechSynthesis.speaking) speechSynthesis.resume();
+      else clearInterval(keepAlive);
+    }, 5000);
+    utt.onend = () => clearInterval(keepAlive);
+    utt.onerror = () => clearInterval(keepAlive);
   };
 
-  if (voicesReady) {
-    doSpeak();
-  } else {
-    voiceReadyCallbacks.push(doSpeak);
-  }
+  speechSynthesis.speak(utt);
 }
 
 function toggleTTS() {
