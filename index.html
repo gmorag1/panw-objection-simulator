@@ -1416,43 +1416,65 @@ Why it works: [1-2 sentences]
 }
 
 // ─────────────────────────────────────────────────────────────
-// VOICE — TTS (Amazon Polly neural via StreamElements)
+// VOICE — TTS
 // ─────────────────────────────────────────────────────────────
 
-// Polly neural voices — sound significantly more human than browser TTS
-const POLLY_VOICES = {
-  alex:  'Matthew',  // US male neural
-  sarah: 'Amy',      // UK female neural
-  james: 'Brian',    // UK male neural
+// Preferred voice names in order — Chrome ships Google neural voices
+// which are the best available without an external API
+const VOICE_TARGETS = {
+  alex:  ['Google US English', 'Alex', 'Samantha', 'Microsoft David Desktop'],
+  sarah: ['Google UK English Female', 'Karen', 'Moira', 'Microsoft Hazel Desktop'],
+  james: ['Google UK English Male', 'Daniel', 'Gordon', 'Microsoft George Desktop'],
 };
 
-let currentAudio = null;
+let voicesReady = false;
+let voiceReadyCallbacks = [];
 
-function initVoices() {} // no-op — no browser voice loading needed
+function initVoices() {
+  const tryLoad = () => {
+    const v = speechSynthesis.getVoices();
+    if (v.length > 0) {
+      voicesReady = true;
+      voiceReadyCallbacks.forEach(fn => fn());
+      voiceReadyCallbacks = [];
+    }
+  };
+  speechSynthesis.onvoiceschanged = tryLoad;
+  tryLoad();
+}
+
+function getVoice() {
+  const preset = document.querySelector('input[name="voice-preset"]:checked')?.value || 'sarah';
+  const targets = VOICE_TARGETS[preset] || VOICE_TARGETS.sarah;
+  const all = speechSynthesis.getVoices();
+  for (const name of targets) {
+    const match = all.find(v => v.name === name);
+    if (match) return match;
+  }
+  return all.find(v => v.lang.startsWith('en')) || null;
+}
 
 function testVoice() {
   speakText("Your pricing is significantly higher than what we've been quoted. Walk me through how you justify that.");
 }
 
-async function speakText(text) {
+function speakText(text) {
   if (!STATE.ttsEnabled || !text.trim()) return;
 
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
+  const doSpeak = () => {
+    speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.voice = getVoice();
+    utt.rate = 0.93;
+    utt.pitch = 1.0;
+    utt.onerror = () => {}; // suppress console errors
+    speechSynthesis.speak(utt);
+  };
 
-  const preset = document.querySelector('input[name="voice-preset"]:checked')?.value || 'sarah';
-  const voice = POLLY_VOICES[preset] || 'Amy';
-  const url = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encodeURIComponent(text)}`;
-
-  try {
-    const audio = new Audio(url);
-    currentAudio = audio;
-    audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
-    await audio.play();
-  } catch (e) {
-    // silently fail — TTS is enhancement only
+  if (voicesReady) {
+    doSpeak();
+  } else {
+    voiceReadyCallbacks.push(doSpeak);
   }
 }
 
@@ -1461,10 +1483,7 @@ function toggleTTS() {
   const btn = document.getElementById('tts-toggle');
   btn.textContent = STATE.ttsEnabled ? '🔊' : '🔇';
   btn.classList.toggle('active', STATE.ttsEnabled);
-  if (!STATE.ttsEnabled && currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
+  if (!STATE.ttsEnabled) speechSynthesis.cancel();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1518,10 +1537,14 @@ function initSTT() {
   };
 
   recognition.onend = () => {
-    STATE.micActive = false;
+    // Chrome auto-stops after a pause in continuous mode — restart if user
+    // hasn't manually stopped
+    if (STATE.micActive) {
+      try { recognition.start(); } catch(_) {}
+      return;
+    }
     document.getElementById('mic-btn').classList.remove('recording');
     document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
-    // Ensure textarea holds only the committed text when mic stops
     const input = document.getElementById('chat-input');
     input.value = committed;
     autoResize(input);
