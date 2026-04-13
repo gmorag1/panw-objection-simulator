@@ -893,12 +893,24 @@ html, body {
       </div>
     </div>
 
+    <div class="field">
+      <label>ElevenLabs API Key <span style="color:var(--text-muted);font-weight:400;text-transform:none">(optional — for human voice)</span></label>
+      <div class="api-key-wrap">
+        <input type="password" id="el-key-input" placeholder="Free at elevenlabs.io" autocomplete="off" spellcheck="false">
+        <button type="button" onclick="toggleElKeyVisibility()" title="Show/hide key">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
     <div class="field" id="voice-field">
       <label>Customer Voice</label>
       <div class="difficulty-group" id="voice-preset-group">
         <div class="diff-option">
           <input type="radio" name="voice-preset" id="vp-alex" value="alex">
-          <label for="vp-alex"><strong>Alex</strong>US Professional</label>
+          <label for="vp-alex"><strong>Alex</strong>US Male</label>
         </div>
         <div class="diff-option">
           <input type="radio" name="voice-preset" id="vp-sarah" value="sarah" checked>
@@ -1419,57 +1431,99 @@ Why it works: [1-2 sentences]
 // VOICE — TTS
 // ─────────────────────────────────────────────────────────────
 
-// Preferred voice names in order — Chrome ships Google neural voices
-// which are the best available without an external API
-const VOICE_TARGETS = {
-  alex:  ['Google US English', 'Alex', 'Samantha', 'Microsoft David Desktop'],
-  sarah: ['Google UK English Female', 'Karen', 'Moira', 'Microsoft Hazel Desktop'],
-  james: ['Google UK English Male', 'Daniel', 'Gordon', 'Microsoft George Desktop'],
+// ElevenLabs voice IDs — these are the most human-sounding voices available
+const EL_VOICES = {
+  alex:  'TxGEqnHWrfWFTfGW9XjX', // Josh — US male
+  sarah: 'EXAVITQu4vr4xnSDxMaL', // Bella — US female (warm, professional)
+  james: 'VR6AewLTigWG4xSOukaG', // Arnold — deep male
 };
 
+// Browser fallback voice names
+const BROWSER_VOICES = {
+  alex:  ['Google US English', 'Alex', 'Samantha'],
+  sarah: ['Google UK English Female', 'Karen', 'Moira'],
+  james: ['Google UK English Male', 'Daniel', 'Gordon'],
+};
+
+let currentAudio = null;
+
 function initVoices() {
-  // Trigger voice list load — Chrome populates it async
   speechSynthesis.getVoices();
   speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 }
 
-function getVoice() {
-  const preset = document.querySelector('input[name="voice-preset"]:checked')?.value || 'sarah';
-  const targets = VOICE_TARGETS[preset] || VOICE_TARGETS.sarah;
-  const all = speechSynthesis.getVoices();
-  for (const name of targets) {
-    const match = all.find(v => v.name === name);
-    if (match) return match;
-  }
-  return all.find(v => v.lang.startsWith('en')) || null;
+function getElKey() {
+  return document.getElementById('el-key-input')?.value.trim() || localStorage.getItem('panw_elkey') || '';
+}
+
+function toggleElKeyVisibility() {
+  const input = document.getElementById('el-key-input');
+  input.type = input.type === 'password' ? 'text' : 'password';
 }
 
 function testVoice() {
   speakText("Your pricing is significantly higher than what we've been quoted. Walk me through how you justify that.");
 }
 
-function speakText(text) {
+async function speakText(text) {
   if (!STATE.ttsEnabled || !text.trim()) return;
 
+  const preset = document.querySelector('input[name="voice-preset"]:checked')?.value || 'sarah';
+  const elKey = getElKey();
+
+  if (elKey) {
+    // ElevenLabs — genuinely human neural voice
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+    try {
+      const voiceId = EL_VOICES[preset] || EL_VOICES.sarah;
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': elKey,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_turbo_v2',
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      });
+      if (!res.ok) throw new Error('ElevenLabs error ' + res.status);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentAudio = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); currentAudio = null; };
+      audio.play();
+      return;
+    } catch (e) {
+      showToast('Voice error — check your ElevenLabs key', 'warning');
+    }
+  }
+
+  // Browser TTS fallback
   speechSynthesis.cancel();
+  const targets = BROWSER_VOICES[preset] || BROWSER_VOICES.sarah;
+  const all = speechSynthesis.getVoices();
+  let voice = null;
+  for (const name of targets) {
+    voice = all.find(v => v.name === name);
+    if (voice) break;
+  }
+  if (!voice) voice = all.find(v => v.lang.startsWith('en')) || null;
 
   const utt = new SpeechSynthesisUtterance(text);
-  utt.voice = getVoice();
+  utt.voice = voice;
   utt.rate = 0.93;
   utt.pitch = 1.0;
   utt.volume = 1.0;
-
-  // Chrome has a known bug where long utterances get cut off silently.
-  // The workaround is to resume() on an interval until it finishes.
   utt.onstart = () => {
     const keepAlive = setInterval(() => {
       if (speechSynthesis.speaking) speechSynthesis.resume();
       else clearInterval(keepAlive);
     }, 5000);
-    utt.onend = () => clearInterval(keepAlive);
-    utt.onerror = () => clearInterval(keepAlive);
+    utt.onend = utt.onerror = () => clearInterval(keepAlive);
   };
-
   speechSynthesis.speak(utt);
 }
 
@@ -1478,7 +1532,10 @@ function toggleTTS() {
   const btn = document.getElementById('tts-toggle');
   btn.textContent = STATE.ttsEnabled ? '🔊' : '🔇';
   btn.classList.toggle('active', STATE.ttsEnabled);
-  if (!STATE.ttsEnabled) speechSynthesis.cancel();
+  if (!STATE.ttsEnabled) {
+    speechSynthesis.cancel();
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1490,78 +1547,90 @@ function initSTT() {
   if (!SR) return;
 
   document.getElementById('mic-btn').style.display = 'flex';
-  const recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
 
-  // Track what's been committed to the textarea so interim text
-  // can be shown without duplicating finalized words
+  // Use continuous:false and manually restart — far more reliable in Chrome
+  // than continuous:true which silently dies after pauses
   let committed = '';
+  let shouldRestart = false;
 
-  recognition.onstart = () => {
-    STATE.micActive = true;
-    committed = document.getElementById('chat-input').value;
-    document.getElementById('mic-btn').classList.add('recording');
-    document.getElementById('input-hint').textContent = 'Listening... click mic to stop';
-  };
+  function makeRecognition() {
+    const r = new SR();
+    r.continuous = false;
+    r.interimResults = true;
+    r.lang = 'en-US';
 
-  recognition.onresult = (e) => {
-    const input = document.getElementById('chat-input');
-    let interimText = '';
-    let finalText = '';
+    r.onstart = () => {
+      document.getElementById('mic-btn').classList.add('recording');
+      document.getElementById('input-hint').textContent = 'Listening... click mic to stop';
+    };
 
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) {
-        finalText += e.results[i][0].transcript;
-      } else {
-        interimText += e.results[i][0].transcript;
+    r.onresult = (e) => {
+      const input = document.getElementById('chat-input');
+      let interimText = '';
+      let finalText = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
+        else interimText += e.results[i][0].transcript;
       }
-    }
+      if (finalText) committed = (committed + ' ' + finalText).trim();
+      input.value = interimText
+        ? (committed ? committed + ' ' : '') + interimText
+        : committed;
+      autoResize(input);
+    };
 
-    if (finalText) {
-      committed = (committed + ' ' + finalText).trim();
-    }
+    r.onend = () => {
+      if (shouldRestart) {
+        // Brief pause between restarts prevents Chrome "already started" errors
+        setTimeout(() => {
+          if (shouldRestart) {
+            STATE.recognition = makeRecognition();
+            STATE.recognition.start();
+          }
+        }, 100);
+      } else {
+        STATE.micActive = false;
+        document.getElementById('mic-btn').classList.remove('recording');
+        document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
+        const input = document.getElementById('chat-input');
+        input.value = committed;
+        autoResize(input);
+      }
+    };
 
-    // Show committed + live interim together so typing appears in real time
-    input.value = interimText
-      ? committed + (committed ? ' ' : '') + interimText
-      : committed;
-
-    autoResize(input);
-  };
-
-  recognition.onend = () => {
-    // Chrome auto-stops after a pause in continuous mode — restart if user
-    // hasn't manually stopped
-    if (STATE.micActive) {
-      try { recognition.start(); } catch(_) {}
-      return;
-    }
-    document.getElementById('mic-btn').classList.remove('recording');
-    document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
-    const input = document.getElementById('chat-input');
-    input.value = committed;
-    autoResize(input);
-  };
-
-  recognition.onerror = (e) => {
-    STATE.micActive = false;
-    document.getElementById('mic-btn').classList.remove('recording');
-    if (e.error !== 'aborted' && e.error !== 'no-speech') {
+    r.onerror = (e) => {
+      if (e.error === 'no-speech') return; // normal — just restart
+      if (e.error === 'aborted') return;
       showToast('Mic error: ' + e.error, 'warning');
-    }
+      shouldRestart = false;
+      STATE.micActive = false;
+      document.getElementById('mic-btn').classList.remove('recording');
+    };
+
+    return r;
+  }
+
+  STATE.recognition = makeRecognition();
+
+  STATE.startMic = () => {
+    committed = document.getElementById('chat-input').value.trim();
+    shouldRestart = true;
+    STATE.micActive = true;
+    STATE.recognition.start();
   };
 
-  STATE.recognition = recognition;
+  STATE.stopMic = () => {
+    shouldRestart = false;
+    STATE.recognition.stop();
+  };
 }
 
 function toggleMic() {
-  if (!STATE.recognition) return;
+  if (!STATE.startMic) return;
   if (STATE.micActive) {
-    STATE.recognition.stop();
+    STATE.stopMic();
   } else {
-    STATE.recognition.start();
+    STATE.startMic();
   }
 }
 
@@ -2065,6 +2134,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const savedKey = localStorage.getItem('panw_apikey');
   if (savedKey) document.getElementById('api-key-input').value = savedKey;
+
+  const savedElKey = localStorage.getItem('panw_elkey');
+  if (savedElKey) document.getElementById('el-key-input').value = savedElKey;
+
+  // Save ElevenLabs key to localStorage when user types it
+  document.getElementById('el-key-input').addEventListener('change', (e) => {
+    const val = e.target.value.trim();
+    if (val) localStorage.setItem('panw_elkey', val);
+    else localStorage.removeItem('panw_elkey');
+  });
 
   const last = JSON.parse(localStorage.getItem('panw_last') || '{}');
   if (last.product)    document.getElementById('product-select').value = last.product;
