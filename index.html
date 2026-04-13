@@ -1606,23 +1606,22 @@ function toggleTTS() {
 function initSTT() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;
-
   document.getElementById('mic-btn').style.display = 'flex';
 
   let committed = '';
   let listening = false;
   let rec = null;
 
-  function newRec() {
-    const r = new SR();
-    r.continuous = false;
-    r.interimResults = true;
-    r.lang = 'en-US';
+  function start() {
+    rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
 
-    r.onresult = (e) => {
+    rec.onresult = (e) => {
       let interim = '', final = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
         else interim += e.results[i][0].transcript;
       }
       if (final) committed = (committed + ' ' + final).trim();
@@ -1631,12 +1630,15 @@ function initSTT() {
       autoResize(inp);
     };
 
-    r.onend = () => {
-      if (listening) setTimeout(() => { rec = newRec(); rec.start(); }, 100);
+    rec.onend = () => {
+      if (!listening) return;
+      // Chrome killed session due to silence — restart
+      setTimeout(() => { if (listening) start(); }, 200);
     };
 
-    r.onerror = (ev) => {
-      if (ev.error === 'no-speech' || ev.error === 'aborted') return;
+    rec.onerror = (ev) => {
+      if (ev.error === 'no-speech') return;
+      if (ev.error === 'aborted') return;
       listening = false;
       STATE.micActive = false;
       document.getElementById('mic-btn').classList.remove('recording');
@@ -1644,29 +1646,30 @@ function initSTT() {
       showToast('Mic error: ' + ev.error, 'warning');
     };
 
-    return r;
+    try { rec.start(); } catch(e) { console.warn('STT start error:', e); }
   }
 
   window.toggleMic = () => {
-    const btn = document.getElementById('mic-btn');
-    const hint = document.getElementById('input-hint');
     if (!listening) {
+      // Stop any playing audio first — avoids mic/speaker conflict
+      speechSynthesis.cancel();
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+
       committed = document.getElementById('chat-input').value.trim();
       listening = true;
       STATE.micActive = true;
-      btn.classList.add('recording');
-      hint.textContent = 'Listening... click mic to stop';
-      rec = newRec();
-      rec.start();
+      document.getElementById('mic-btn').classList.add('recording');
+      document.getElementById('input-hint').textContent = 'Listening... click mic to stop';
+      start();
     } else {
       listening = false;
       STATE.micActive = false;
-      if (rec) { rec.onend = null; rec.stop(); }
+      if (rec) { rec.onend = null; rec.stop(); rec = null; }
       const inp = document.getElementById('chat-input');
       inp.value = committed;
       autoResize(inp);
-      btn.classList.remove('recording');
-      hint.textContent = 'Enter to send \u2022 Shift+Enter for new line';
+      document.getElementById('mic-btn').classList.remove('recording');
+      document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
     }
   };
 }
@@ -1895,15 +1898,21 @@ async function sendMessage() {
 
 async function fetchTip(salespersonMsg, customerReply) {
   try {
+    // find the customer message that the salesperson was responding to
+    const assistantMsgs = STATE.messages.filter(m => m.role === 'assistant');
+    const prevCustomer = assistantMsgs.length >= 2
+      ? assistantMsgs[assistantMsgs.length - 2].content
+      : assistantMsgs[0]?.content || '';
+
     const tip = await callClaude({
-      system: 'You are a concise sales coach. Give exactly 1-2 sentences of specific, actionable feedback on the salesperson\'s response. Start with "Next time," or "Stronger if you". Be direct and specific — reference what they actually said. No praise, no preamble.',
+      system: 'You are a concise enterprise sales coach. Give exactly 1-2 sentences of specific, actionable feedback on the salesperson\'s response. Start with "Next time," or "Stronger if you". Reference what they actually said. No praise, no preamble.',
       messages: [
-        { role: 'user', content: `Product: ${PRODUCTS[STATE.product].label}\nObjection type: ${OBJECTIONS[STATE.objectionType].label}\n\nCustomer said: "${STATE.messages.filter(m => m.role === 'assistant').slice(-2, -1)[0]?.content || ''}"\n\nSalesperson responded: "${salespersonMsg}"\n\nCustomer replied: "${customerReply}"\n\nGive your coaching tip.` }
+        { role: 'user', content: `Product: ${PRODUCTS[STATE.product].label}\nObjection: ${OBJECTIONS[STATE.objectionType].label}\n\nCustomer said: "${prevCustomer}"\n\nSalesperson responded: "${salespersonMsg}"\n\nCustomer replied: "${customerReply}"\n\nCoaching tip:` }
       ],
     });
-    renderTip(tip);
-  } catch(_) {
-    // tips are best-effort — don't surface errors
+    if (tip && tip.trim()) renderTip(tip.trim());
+  } catch(e) {
+    console.warn('Tip fetch failed:', e.message);
   }
 }
 
