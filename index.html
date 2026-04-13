@@ -1548,90 +1548,71 @@ function initSTT() {
 
   document.getElementById('mic-btn').style.display = 'flex';
 
-  // Use continuous:false and manually restart — far more reliable in Chrome
-  // than continuous:true which silently dies after pauses
-  let committed = '';
-  let shouldRestart = false;
+  let committed = '';   // finalized words
+  let listening = false; // user intent — are we in recording mode?
+  let rec = null;
 
-  function makeRecognition() {
-    const r = new SR();
-    r.continuous = false;
-    r.interimResults = true;
-    r.lang = 'en-US';
+  function startRec() {
+    rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
 
-    r.onstart = () => {
-      document.getElementById('mic-btn').classList.add('recording');
-      document.getElementById('input-hint').textContent = 'Listening... click mic to stop';
-    };
-
-    r.onresult = (e) => {
+    rec.onresult = (e) => {
       const input = document.getElementById('chat-input');
-      let interimText = '';
-      let finalText = '';
+      let interim = '', final = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
-        else interimText += e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += e.results[i][0].transcript;
+        else interim += e.results[i][0].transcript;
       }
-      if (finalText) committed = (committed + ' ' + finalText).trim();
-      input.value = interimText
-        ? (committed ? committed + ' ' : '') + interimText
-        : committed;
+      if (final) committed = (committed + ' ' + final).trim();
+      input.value = interim ? (committed ? committed + ' ' : '') + interim : committed;
       autoResize(input);
     };
 
-    r.onend = () => {
-      if (shouldRestart) {
-        // Brief pause between restarts prevents Chrome "already started" errors
-        setTimeout(() => {
-          if (shouldRestart) {
-            STATE.recognition = makeRecognition();
-            STATE.recognition.start();
-          }
-        }, 100);
+    rec.onend = () => {
+      if (listening) {
+        // auto-restart so recording stays continuous
+        setTimeout(startRec, 80);
       } else {
-        STATE.micActive = false;
-        document.getElementById('mic-btn').classList.remove('recording');
-        document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
+        // user stopped — lock committed text into field
         const input = document.getElementById('chat-input');
         input.value = committed;
         autoResize(input);
+        document.getElementById('mic-btn').classList.remove('recording');
+        document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
       }
     };
 
-    r.onerror = (e) => {
-      if (e.error === 'no-speech') return; // normal — just restart
-      if (e.error === 'aborted') return;
+    rec.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
       showToast('Mic error: ' + e.error, 'warning');
-      shouldRestart = false;
+      listening = false;
       STATE.micActive = false;
       document.getElementById('mic-btn').classList.remove('recording');
     };
 
-    return r;
+    try { rec.start(); } catch(_) {}
   }
 
-  STATE.recognition = makeRecognition();
+  STATE.micActive = false;
 
-  STATE.startMic = () => {
-    committed = document.getElementById('chat-input').value.trim();
-    shouldRestart = true;
-    STATE.micActive = true;
-    STATE.recognition.start();
+  window.toggleMic = () => {
+    if (!listening) {
+      // Start recording
+      committed = document.getElementById('chat-input').value.trim();
+      listening = true;
+      STATE.micActive = true;
+      document.getElementById('mic-btn').classList.add('recording');
+      document.getElementById('input-hint').textContent = 'Listening... click mic to stop';
+      startRec();
+    } else {
+      // Stop recording
+      listening = false;
+      STATE.micActive = false;
+      if (rec) rec.stop();
+    }
   };
-
-  STATE.stopMic = () => {
-    shouldRestart = false;
-    STATE.recognition.stop();
-  };
-}
-
-function toggleMic() {
-  if (!STATE.startMic) return;
-  if (STATE.micActive) {
-    STATE.stopMic();
-  } else {
-    STATE.startMic();
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
