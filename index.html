@@ -803,6 +803,57 @@ html, body {
 .toast.error { border-color: var(--red); color: var(--red); }
 .toast.warning { border-color: var(--yellow); color: var(--yellow); }
 
+.sim-end-bar {
+  padding: 10px 20px;
+  border-top: 1px solid var(--navy-border);
+  background: var(--navy-mid);
+  display: flex;
+  justify-content: center;
+}
+
+.end-session-bar-btn {
+  background: rgba(250,88,45,0.1);
+  border: 1px solid rgba(250,88,45,0.4);
+  border-radius: 8px;
+  color: var(--orange);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font);
+  padding: 9px 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.end-session-bar-btn:hover {
+  background: rgba(250,88,45,0.2);
+  border-color: var(--orange);
+}
+
+.coaching-tip {
+  align-self: center;
+  max-width: 72%;
+  background: rgba(234,179,8,0.07);
+  border: 1px solid rgba(234,179,8,0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #c9a600;
+  line-height: 1.55;
+  animation: msgIn 0.2s ease;
+}
+
+.coaching-tip strong {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+  color: var(--yellow);
+}
+
 /* Responsive */
 @media (max-width: 680px) {
   .debrief-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
@@ -952,6 +1003,16 @@ html, body {
   </div>
 
   <div class="chat-feed" id="chat-feed"></div>
+
+  <div class="sim-end-bar" id="sim-end-bar" style="display:none">
+    <button class="end-session-bar-btn" onclick="confirmEndSession()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="9 11 12 14 22 4"/>
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+      I'm done — get my coaching report
+    </button>
+  </div>
 
   <div class="sim-input-area">
     <div class="input-row">
@@ -1548,69 +1609,64 @@ function initSTT() {
 
   document.getElementById('mic-btn').style.display = 'flex';
 
-  let committed = '';   // finalized words
-  let listening = false; // user intent — are we in recording mode?
+  let committed = '';
+  let listening = false;
   let rec = null;
 
-  function startRec() {
-    rec = new SR();
-    rec.continuous = false;
-    rec.interimResults = true;
-    rec.lang = 'en-US';
+  function newRec() {
+    const r = new SR();
+    r.continuous = false;
+    r.interimResults = true;
+    r.lang = 'en-US';
 
-    rec.onresult = (e) => {
-      const input = document.getElementById('chat-input');
+    r.onresult = (e) => {
       let interim = '', final = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) final += e.results[i][0].transcript;
         else interim += e.results[i][0].transcript;
       }
       if (final) committed = (committed + ' ' + final).trim();
-      input.value = interim ? (committed ? committed + ' ' : '') + interim : committed;
-      autoResize(input);
+      const inp = document.getElementById('chat-input');
+      inp.value = interim ? (committed ? committed + ' ' : '') + interim : committed;
+      autoResize(inp);
     };
 
-    rec.onend = () => {
-      if (listening) {
-        // auto-restart so recording stays continuous
-        setTimeout(startRec, 80);
-      } else {
-        // user stopped — lock committed text into field
-        const input = document.getElementById('chat-input');
-        input.value = committed;
-        autoResize(input);
-        document.getElementById('mic-btn').classList.remove('recording');
-        document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
-      }
+    r.onend = () => {
+      if (listening) setTimeout(() => { rec = newRec(); rec.start(); }, 100);
     };
 
-    rec.onerror = (e) => {
-      if (e.error === 'no-speech' || e.error === 'aborted') return;
-      showToast('Mic error: ' + e.error, 'warning');
+    r.onerror = (ev) => {
+      if (ev.error === 'no-speech' || ev.error === 'aborted') return;
       listening = false;
       STATE.micActive = false;
       document.getElementById('mic-btn').classList.remove('recording');
+      document.getElementById('input-hint').textContent = 'Enter to send \u2022 Shift+Enter for new line';
+      showToast('Mic error: ' + ev.error, 'warning');
     };
 
-    try { rec.start(); } catch(_) {}
+    return r;
   }
 
-  STATE.micActive = false;
-
   window.toggleMic = () => {
+    const btn = document.getElementById('mic-btn');
+    const hint = document.getElementById('input-hint');
     if (!listening) {
-      // Start recording
       committed = document.getElementById('chat-input').value.trim();
       listening = true;
       STATE.micActive = true;
-      document.getElementById('mic-btn').classList.add('recording');
-      document.getElementById('input-hint').textContent = 'Listening... click mic to stop';
-      startRec();
+      btn.classList.add('recording');
+      hint.textContent = 'Listening... click mic to stop';
+      rec = newRec();
+      rec.start();
     } else {
-      // Stop recording
       listening = false;
       STATE.micActive = false;
-      if (rec) rec.stop();
+      if (rec) { rec.onend = null; rec.stop(); }
+      const inp = document.getElementById('chat-input');
+      inp.value = committed;
+      autoResize(inp);
+      btn.classList.remove('recording');
+      hint.textContent = 'Enter to send \u2022 Shift+Enter for new line';
     }
   };
 }
@@ -1824,9 +1880,40 @@ async function sendMessage() {
       setInputEnabled(true);
       document.getElementById('chat-input').focus();
       if (STATE.ttsEnabled) speakText(full);
+
+      // Show end bar after turn 2
+      if (STATE.turnCount >= 2) {
+        document.getElementById('sim-end-bar').style.display = 'flex';
+      }
+
+      // Fetch inline coaching tip in background
+      fetchTip(text, full);
     },
     onError: handleApiError,
   });
+}
+
+async function fetchTip(salespersonMsg, customerReply) {
+  try {
+    const tip = await callClaude({
+      system: 'You are a concise sales coach. Give exactly 1-2 sentences of specific, actionable feedback on the salesperson\'s response. Start with "Next time," or "Stronger if you". Be direct and specific — reference what they actually said. No praise, no preamble.',
+      messages: [
+        { role: 'user', content: `Product: ${PRODUCTS[STATE.product].label}\nObjection type: ${OBJECTIONS[STATE.objectionType].label}\n\nCustomer said: "${STATE.messages.filter(m => m.role === 'assistant').slice(-2, -1)[0]?.content || ''}"\n\nSalesperson responded: "${salespersonMsg}"\n\nCustomer replied: "${customerReply}"\n\nGive your coaching tip.` }
+      ],
+    });
+    renderTip(tip);
+  } catch(_) {
+    // tips are best-effort — don't surface errors
+  }
+}
+
+function renderTip(tip) {
+  const feed = document.getElementById('chat-feed');
+  const el = document.createElement('div');
+  el.className = 'coaching-tip';
+  el.innerHTML = `<strong>💡 Coaching tip</strong>${tip}`;
+  feed.appendChild(el);
+  feed.scrollTop = feed.scrollHeight;
 }
 
 function confirmEndSession() {
