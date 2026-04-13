@@ -829,6 +829,18 @@ html, body {
     </div>
 
     <div class="field">
+      <label>Anthropic API Key</label>
+      <div class="api-key-wrap">
+        <input type="password" id="api-key-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+        <button type="button" onclick="toggleKeyVisibility()" title="Show/hide key">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="field">
       <label>Product</label>
       <select id="product-select">
         <option value="">Select a product...</option>
@@ -999,7 +1011,7 @@ html, body {
 // CONFIG
 // ─────────────────────────────────────────────────────────────
 
-const API_KEY = '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';
+const API_KEY = null; // key is entered by the user on the setup screen
 
 // Voice presets — each lists candidate names in preference order.
 // Chrome ships Google neural TTS voices which are significantly better than OS defaults.
@@ -1190,7 +1202,7 @@ const DIFFICULTY = {
 // ─────────────────────────────────────────────────────────────
 
 const STATE = {
-  apiKey: API_KEY,
+  apiKey: '',
   product: '',
   objectionType: '',
   difficulty: 'mid',
@@ -1647,16 +1659,20 @@ function showSetupError(msg) {
 // ─────────────────────────────────────────────────────────────
 
 async function startSession() {
+  const apiKey = document.getElementById('api-key-input').value.trim();
   const product = document.getElementById('product-select').value;
   const objection = document.getElementById('objection-select').value;
   const difficulty = document.querySelector('input[name="difficulty"]:checked')?.value || 'mid';
 
+  if (!apiKey) return showSetupError('Enter your Anthropic API key.');
   if (!product) return showSetupError('Select a product.');
   if (!objection) return showSetupError('Select an objection type.');
   showSetupError('');
 
+  localStorage.setItem('panw_apikey', apiKey);
   localStorage.setItem('panw_last', JSON.stringify({ product, objection, difficulty }));
 
+  STATE.apiKey        = apiKey;
   STATE.product       = product;
   STATE.objectionType = objection;
   STATE.difficulty    = difficulty;
@@ -2020,9 +2036,17 @@ function handleApiError(message) {
 // INIT
 // ─────────────────────────────────────────────────────────────
 
+function toggleKeyVisibility() {
+  const input = document.getElementById('api-key-input');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initVoices();
   initSTT();
+
+  const savedKey = localStorage.getItem('panw_apikey');
+  if (savedKey) document.getElementById('api-key-input').value = savedKey;
 
   const last = JSON.parse(localStorage.getItem('panw_last') || '{}');
   if (last.product)    document.getElementById('product-select').value = last.product;
